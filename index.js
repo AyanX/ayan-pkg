@@ -6,4 +6,5 @@ module.exports = {
   generateBlurImage,
   createUploader: upload.createUploader,
   createBlurImage: generateBlurImage.createBlurImage,
+  uploadMultiple: upload.array,
 };

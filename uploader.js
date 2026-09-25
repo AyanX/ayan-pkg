@@ -3,19 +3,12 @@ const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
 const sharp = require("sharp");
-const { createConfig, publicUrl } = require("./config");
+const { createConfig, publicUrl, tempPathFor } = require("./config");
+const { FORMAT_MIME_TYPES, FORMATS, ALLOWED_MIME_TYPES, MAX_PIXELS, MAX_DIMENSION } = require("./formats");
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
-const MAX_DIMENSION = 10_000;
-const MAX_PIXELS = 40_000_000;
-const FORMAT_MIME_TYPES = {
-  jpeg: new Set(["image/jpeg", "image/jpg"]),
-  png: new Set(["image/png"]),
-  webp: new Set(["image/webp"]),
-  avif: new Set(["image/avif"]),
-};
-const FORMATS = new Set(Object.keys(FORMAT_MIME_TYPES));
-const MIME_TYPES = new Set(Object.values(FORMAT_MIME_TYPES).flatMap((types) => [...types]));
+const MAX_FILES = 10;
+const DEFAULT_CONCURRENCY = 2;
 
 function uploadError(code, message, cause) {
   const error = new Error(message);
@@ -27,7 +20,106 @@ function uploadError(code, message, cause) {
 function getMulterErrorCode(error) {
   if (error.code === "LIMIT_UNEXPECTED_FILE") return "UNEXPECTED_FIELD";
   if (error.code === "LIMIT_FILE_SIZE") return "IMAGE_TOO_LARGE";
+  if (error.code === "LIMIT_FILE_COUNT") return "TOO_MANY_FILES";
   return error.code || "INVALID_IMAGE";
+}
+
+function filterAllowedMimeType(_req, file, cb) {
+  if (ALLOWED_MIME_TYPES.has(String(file.mimetype).toLowerCase())) return cb(null, true);
+  return cb(uploadError("INVALID_IMAGE", "Unsupported image content type"));
+}
+
+async function mapConcurrent(items, limit, fn) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(limit, items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      try {
+        const value = await fn(items[index], index);
+        results[index] = { status: "fulfilled", value };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+const MULTER_SLOT_KEYS = ["file", "files"];
+
+function canInterceptSlot(descriptor) {
+  return !descriptor || descriptor.configurable;
+}
+
+function captureMulterUpload(req) {
+  const captured = { file: undefined, files: undefined, descriptors: {} };
+
+  for (const key of MULTER_SLOT_KEYS) {
+    const descriptor = Object.getOwnPropertyDescriptor(req, key);
+    captured.descriptors[key] = descriptor;
+    if (!canInterceptSlot(descriptor)) continue;
+    Object.defineProperty(req, key, {
+      configurable: true,
+      get: () => captured[key],
+      set: (value) => { captured[key] = value; },
+    });
+  }
+
+  return captured;
+}
+
+function releaseMulterUpload(req, captured) {
+  for (const key of MULTER_SLOT_KEYS) {
+    const descriptor = captured.descriptors[key];
+    if (!canInterceptSlot(descriptor)) continue;
+    if (descriptor) Object.defineProperty(req, key, descriptor);
+    else delete req[key];
+  }
+}
+
+function initAyan(req, defaults) {
+  req.ayan = Object.assign(req.ayan || {}, defaults);
+}
+
+function runUpload(req, res, next, multerUpload, processUpload) {
+  const captured = captureMulterUpload(req);
+
+  try {
+    multerUpload(req, res, (err) => {
+      const source = captured.file ?? captured.files;
+      releaseMulterUpload(req, captured);
+
+      if (err) {
+        req.ayan.error = uploadError(getMulterErrorCode(err), err.message, err).message;
+        return next();
+      }
+
+      Promise.resolve(source)
+        .then(processUpload)
+        .catch((error) => { req.ayan.error = error.message; })
+        .finally(() => next());
+    });
+  } catch (error) {
+    releaseMulterUpload(req, captured);
+    req.ayan.error = error.message;
+    next();
+  }
+}
+
+function buildSavedFile(original, saved, config) {
+  return {
+    fieldname: original.fieldname,
+    originalname: original.originalname,
+    encoding: original.encoding,
+    mimetype: saved.mimetype,
+    size: saved.size,
+    filename: saved.filename,
+    destination: config.uploadDir,
+    path: saved.path,
+  };
 }
 
 function getOutputSettings(format, options) {
@@ -62,7 +154,7 @@ async function validateAndSave(file, config, options) {
   const extension = format === "jpeg" ? "jpg" : format;
   const filename = `${crypto.randomBytes(24).toString("hex")}.${extension}`;
   const finalPath = path.join(config.uploadDir, filename);
-  const tempPath = path.join(config.uploadDir, `.${filename}.${crypto.randomBytes(8).toString("hex")}.tmp`);
+  const tempPath = tempPathFor(config.uploadDir, filename);
   const output = getOutputSettings(format, options);
   const pipeline = sharp(file.buffer, { limitInputPixels: maxPixels }).rotate()[output.method](output.options);
 
@@ -75,7 +167,7 @@ async function validateAndSave(file, config, options) {
       filename,
       path: finalPath,
       size: stat.size,
-      mimetype: `image/${extension === "jpg" ? "jpeg" : extension}`,
+      mimetype: `image/${format}`,
     };
   } catch (error) {
     await fs.promises.rm(tempPath, { force: true }).catch(() => {});
@@ -87,54 +179,67 @@ function createUploader(options = {}) {
   const config = createConfig(options);
   const storage = multer.memoryStorage();
 
-  function createMiddleware(fieldName = "image") {
-    const multerUpload = multer({
+  function createMulterOptions(maxFiles) {
+    return {
       storage,
-      limits: { fileSize: options.maxFileSize || MAX_FILE_SIZE, files: 1 },
-      fileFilter: (_req, file, cb) => {
-        if (!MIME_TYPES.has(String(file.mimetype).toLowerCase())) return cb(uploadError("INVALID_IMAGE", "Unsupported image content type"));
-        return cb(null, true);
-      },
-    }).single(fieldName || "image");
+      limits: { fileSize: options.maxFileSize || MAX_FILE_SIZE, files: maxFiles },
+      fileFilter: filterAllowedMimeType,
+    };
+  }
+
+  function createMiddleware(fieldName = "image") {
+    const multerUpload = multer(createMulterOptions(1)).single(fieldName || "image");
 
     return (req, res, next) => {
-      req.fileUrl = null;
-      multerUpload(req, res, async (err) => {
-        if (err) {
-          return next(uploadError(getMulterErrorCode(err), err.message, err));
-        }
-        if (!req.file) return next();
+      initAyan(req, { error: null, file: null, fileUrl: null });
 
-        try {
-          const original = req.file;
-          const saved = await validateAndSave(original, config, options);
-          req.file = {
-            fieldname: original.fieldname,
-            originalname: original.originalname,
-            encoding: original.encoding,
-            mimetype: saved.mimetype,
-            size: saved.size,
-            filename: saved.filename,
-            destination: config.uploadDir,
-            path: saved.path,
-          };
-          req.fileUrl = publicUrl(config, saved.filename);
-          return next();
-        } catch (error) {
-          req.file = undefined;
-          req.fileUrl = null;
-          return next(error);
+      runUpload(req, res, next, multerUpload, async (original) => {
+        if (!original) return;
+
+        const saved = await validateAndSave(original, config, options);
+        req.ayan.file = buildSavedFile(original, saved, config);
+        req.ayan.fileUrl = publicUrl(config, saved.filename);
+      });
+    };
+  }
+
+  function createArrayMiddleware(fieldName = "images", maxCount = options.maxFiles || MAX_FILES) {
+    const concurrency = Math.max(1, options.concurrency || DEFAULT_CONCURRENCY);
+    const multerUpload = multer(createMulterOptions(maxCount)).array(fieldName || "images", maxCount);
+
+    return (req, res, next) => {
+      initAyan(req, { error: null, files: [], fileUrls: [] });
+
+      runUpload(req, res, next, multerUpload, async (incoming) => {
+        const originals = incoming || [];
+        if (!originals.length) return;
+
+        const settled = await mapConcurrent(originals, concurrency, (file) => validateAndSave(file, config, options));
+        const failed = settled.find((result) => result.status === "rejected");
+        if (failed) {
+          await Promise.all(
+            settled
+              .filter((result) => result.status === "fulfilled")
+              .map((result) => fs.promises.rm(result.value.path, { force: true }).catch(() => {})),
+          );
+          req.ayan.error = failed.reason?.message || "Image processing failed";
+          return;
         }
+
+        req.ayan.files = originals.map((original, i) => buildSavedFile(original, settled[i].value, config));
+        req.ayan.fileUrls = req.ayan.files.map((file) => publicUrl(config, file.filename));
       });
     };
   }
 
   const defaultMiddleware = createMiddleware("image");
-  return function configuredUpload(fieldOrReq, res, next) {
+  const configuredUpload = function configuredUpload(fieldOrReq, res, next) {
     if (typeof fieldOrReq === "string") return createMiddleware(fieldOrReq);
     if (!fieldOrReq || typeof fieldOrReq !== "object") return defaultMiddleware;
     return defaultMiddleware(fieldOrReq, res, next);
   };
+  configuredUpload.array = createArrayMiddleware;
+  return configuredUpload;
 }
 
 const upload = createUploader();

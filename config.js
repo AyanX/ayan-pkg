@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const path = require("path");
 const { URL } = require("url");
 
@@ -31,4 +32,8 @@ function publicUrl(config, suffix) {
   return `${config.publicBaseUrl}${config.publicPath}/${suffix}`;
 }
 
-module.exports = { createConfig, publicUrl };
+function tempPathFor(dir, filename) {
+  return path.join(dir, `.${filename}.${crypto.randomBytes(8).toString("hex")}.tmp`);
+}
+
+module.exports = { createConfig, publicUrl, tempPathFor };

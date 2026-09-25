@@ -1,11 +1,8 @@
 {
   "name": "ayan-pkg",
-  "version": "2.0.1",
+  "version": "3.0.0",
   "description": "Express image upload middleware with blur placeholder generation",
-  "main": "index.js",
-  "scripts": {
-    "test": "node --test tests/ayan.test.js"
-  },
+  "main": "index.js", 
   "repository": {
     "type": "git",
     "url": "git+https://github.com/AyanX/ayan-pkg.git"
@@ -22,14 +19,15 @@
     "blur",
     "placeholder"
   ],
-  "author": "",
+  "author": "AyanX <fearthesorcerer@gmail.com>",
   "license": "ISC",
   "type": "commonjs",
   "files": [
     "index.js",
     "uploader.js",
     "blur.js",
-    "config.js"
+    "config.js",
+    "formats.js"
   ],
   "engines": {
     "node": ">=20.9.0"
