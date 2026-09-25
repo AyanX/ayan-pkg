@@ -4,19 +4,32 @@
   "description": "Express image upload middleware with blur placeholder generation",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test tests/ayan.test.js"
   },
-  "keywords": ["upload", "image", "express", "middleware", "blur", "placeholder"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AyanX/ayan-pkg.git"
+  },
+  "homepage": "https://github.com/AyanX/ayan-pkg#readme",
+  "bugs": {
+    "url": "https://github.com/AyanX/ayan-pkg/issues"
+  },
+  "keywords": [
+    "upload",
+    "image",
+    "express",
+    "middleware",
+    "blur",
+    "placeholder"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/AyanX/ayan/issues"
-  },
   "files": [
     "index.js",
     "uploader.js",
-    "blur.js"
+    "blur.js",
+    "config.js"
   ],
   "engines": {
     "node": ">=20.9.0"
