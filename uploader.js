@@ -117,8 +117,8 @@ function buildSavedFile(original, saved, config) {
     mimetype: saved.mimetype,
     size: saved.size,
     filename: saved.filename,
-    destination: config.uploadDir,
-    path: saved.path,
+    destination: config.publicPath,
+    path: publicUrl(config, saved.filename),
   };
 }
 

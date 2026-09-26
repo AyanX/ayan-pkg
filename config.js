@@ -32,8 +32,12 @@ function publicUrl(config, suffix) {
   return `${config.publicBaseUrl}${config.publicPath}/${suffix}`;
 }
 
+function publicFilePath(config, filename) {
+  return `${config.publicPath}/${filename}`;
+}
+
 function tempPathFor(dir, filename) {
   return path.join(dir, `.${filename}.${crypto.randomBytes(8).toString("hex")}.tmp`);
 }
 
-module.exports = { createConfig, publicUrl, tempPathFor };
+module.exports = { createConfig, publicUrl, publicFilePath, tempPathFor };

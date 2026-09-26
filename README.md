@@ -94,8 +94,10 @@ Every entry in `req.ayan.file` / `req.ayan.files` has this shape:
   mimetype: "image/png",       // canonical type of the file on disk
   size: 24510,                 // bytes after re-encoding
   filename: "6c9f...cd8e.png", // random name on disk
-  destination: "/mnt/images",  // absolute upload directory
-  path: "/mnt/images/6c9f...cd8e.png",
+  destination: "/media",       // publicPath (no machine absolute path)
+  path: "https://cdn.example.com/assets/media/6c9f...cd8e.png", // equals fileUrl, usable as <img src>
 }
 ```
+
+`path` always equals `fileUrl` (`[<publicBaseUrl>/]<publicPath>/<filename>` — full URL when `publicBaseUrl`/`APP_URL` is configured, relative path otherwise). No absolute filesystem paths are exposed. To resolve to disk server-side, join your configured `uploadDir` with `filename`.
 

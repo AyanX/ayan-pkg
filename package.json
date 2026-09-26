@@ -1,6 +1,6 @@
 {
   "name": "ayan-pkg",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Express image upload middleware with blur placeholder generation",
   "main": "index.js", 
   "repository": {
